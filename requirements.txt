@@ -1,0 +1,5 @@
+requests>=2.31.0
+eth-account>=0.11.0
+web3>=6.15.0
+colorama>=0.4.6
+pytz>=2023.3

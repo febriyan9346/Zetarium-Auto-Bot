@@ -424,19 +424,24 @@ class ZetariumBot:
                     random.shuffle(active_markets)
                     
                     if not active_markets:
-                        self.log("No Active/Open Markets found!", "ERROR")
+                        self.log("No Active/Open Markets found! Skipping trades...", "WARNING")
                         return
 
+                    successful_trades = 0
                     market_index = 0
+                    max_attempts_per_trade = len(active_markets)
+                    
                     for trade_num in range(1, self.trade_count_per_account + 1):
                         self.random_delay(2, 4)
                         print(f"{Fore.YELLOW}--- Trade #{trade_num}/{self.trade_count_per_account} ---{Style.RESET_ALL}")
                         
                         trade_success = False
+                        attempts = 0
                         
-                        while not trade_success and market_index < len(active_markets):
+                        while not trade_success and attempts < max_attempts_per_trade and market_index < len(active_markets):
                             target = active_markets[market_index]
                             market_index += 1
+                            attempts += 1
                             
                             m_id = target['id']
                             question = target['question']
@@ -462,16 +467,21 @@ class ZetariumBot:
                             trade_success = self.buy_prediction(pk, m_id, outcome, bet_amount)
                             
                             if not trade_success:
+                                if market_index < len(active_markets):
+                                    self.log(f"Trying next market... ({attempts}/{max_attempts_per_trade})", "INFO")
                                 time.sleep(1)
                         
-                        if not trade_success:
-                            self.log("Failed to place bet after trying multiple markets.", "ERROR")
-                            break
+                        if trade_success:
+                            successful_trades += 1
+                        else:
+                            self.log(f"Could not place trade #{trade_num}, skipping to next trade...", "WARNING")
                         
                         if trade_num < self.trade_count_per_account:
-                            time.sleep(random.randint(5, 10))
+                            time.sleep(random.randint(3, 6))
+                    
+                    self.log(f"Trade Summary: {successful_trades}/{self.trade_count_per_account} successful", "INFO")
                 else:
-                    self.log("Failed to fetch market data", "ERROR")
+                    self.log("Failed to fetch market data, skipping trades...", "WARNING")
 
         else:
             self.log("No Private Key found for this account", "WARNING")
@@ -497,8 +507,8 @@ class ZetariumBot:
         
         self.log(f"Loaded {len(accounts)} accounts successfully", "SUCCESS")
 
+        cycle = 1
         while True:
-            cycle = 1
             self.log(f"Cycle #{cycle} Started", "CYCLE")
             print(f"{Fore.CYAN}------------------------------------------------------------{Style.RESET_ALL}")
             

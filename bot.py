@@ -157,6 +157,18 @@ class ZetariumBot:
             time.sleep(1)
         print("\r" + " " * 60 + "\r", end="", flush=True)
 
+    def check_balance(self, private_key):
+        try:
+            account = self.w3.eth.account.from_key(private_key)
+            wallet = account.address
+            token_contract = self.w3.eth.contract(address=Web3.to_checksum_address(TOKEN_ADDRESS), abi=self.token_abi)
+            balance = token_contract.functions.balanceOf(wallet).call()
+            balance_usdc = self.w3.from_wei(balance, 'ether')
+            return float(balance_usdc)
+        except Exception as e:
+            self.log(f"Balance check failed: {e}", "ERROR")
+            return 0
+
     def check_and_approve(self, private_key, amount_wei):
         try:
             account = self.w3.eth.account.from_key(private_key)
@@ -262,9 +274,11 @@ class ZetariumBot:
                 self.log(f"Betting Rejected (Market Closed/Error). Retrying...", "WARNING")
                 return False
 
+            nonce = self.w3.eth.get_transaction_count(wallet, 'pending')
+            
             tx = contract_func.build_transaction({
                 'from': wallet,
-                'nonce': self.w3.eth.get_transaction_count(wallet),
+                'nonce': nonce,
                 'gas': gas_limit, 
                 'gasPrice': self.w3.eth.gas_price
             })
@@ -401,6 +415,9 @@ class ZetariumBot:
 
             self.log(f"Wallet: {wallet_address[:6]}...{wallet_address[-4:]}", "INFO")
             
+            current_balance = self.check_balance(pk)
+            self.log(f"USDC Balance: {current_balance:.2f}", "INFO")
+            
             self.log("Processing Daily GM...", "INFO")
             res = self.claim_daily_gm(token, pk, wallet_address, proxy)
             
@@ -413,7 +430,12 @@ class ZetariumBot:
             if mode == '2':
                 self.random_delay(1, 2)
                 self.log("Processing Faucet Claim...", "INFO")
-                self.claim_faucet(pk)
+                faucet_result = self.claim_faucet(pk)
+                
+                if faucet_result:
+                    time.sleep(3)
+                    current_balance = self.check_balance(pk)
+                    self.log(f"Updated USDC Balance: {current_balance:.2f}", "INFO")
 
                 self.log(f"Starting Prediction Loop ({self.trade_count_per_account} Trades)...", "INFO")
                 
@@ -428,19 +450,47 @@ class ZetariumBot:
                         return
 
                     successful_trades = 0
-                    market_index = 0
-                    max_attempts_per_trade = len(active_markets)
                     
                     for trade_num in range(1, self.trade_count_per_account + 1):
-                        self.random_delay(2, 4)
+                        current_balance = self.check_balance(pk)
+                        
+                        if current_balance < 10:
+                            self.log(f"Balance too low ({current_balance:.2f} USDC). Stopping trades.", "WARNING")
+                            break
+                        
+                        if trade_num % 15 == 1 and trade_num > 1:
+                            self.log(f"Auto-refresh at trade #{trade_num}. Fetching fresh market data...", "INFO")
+                            markets = self.get_prediction_markets(proxy)
+                            if markets and "markets" in markets:
+                                active_markets = [m for m in markets['markets'] if m.get('status') == 0]
+                                random.shuffle(active_markets)
+                                self.log(f"Refreshed: {len(active_markets)} active markets available", "SUCCESS")
+                                time.sleep(2)
+                            else:
+                                self.log("Failed to refresh market data", "ERROR")
+                        
+                        self.random_delay(3, 6)
                         print(f"{Fore.YELLOW}--- Trade #{trade_num}/{self.trade_count_per_account} ---{Style.RESET_ALL}")
                         
                         trade_success = False
                         attempts = 0
+                        max_attempts = min(10, len(active_markets))
                         
-                        while not trade_success and attempts < max_attempts_per_trade and market_index < len(active_markets):
-                            target = active_markets[market_index]
-                            market_index += 1
+                        while not trade_success and attempts < max_attempts:
+                            if not active_markets or len(active_markets) < 3:
+                                self.log("Low market count. Fetching fresh market data...", "INFO")
+                                markets = self.get_prediction_markets(proxy)
+                                if markets and "markets" in markets:
+                                    active_markets = [m for m in markets['markets'] if m.get('status') == 0]
+                                    random.shuffle(active_markets)
+                                    if not active_markets:
+                                        self.log("No active markets available", "ERROR")
+                                        break
+                                else:
+                                    self.log("Failed to fetch market data", "ERROR")
+                                    break
+                            
+                            target = active_markets.pop(0)
                             attempts += 1
                             
                             m_id = target['id']
@@ -461,25 +511,40 @@ class ZetariumBot:
 
                             bet_amount = random.randint(50, 100)
                             
-                            print(f"{Fore.MAGENTA}[MARKET] {question} (ID: {m_id}){Style.RESET_ALL}")
-                            print(f"{Fore.CYAN}Strategy: {reason}{Style.RESET_ALL}")
+                            if bet_amount > current_balance:
+                                bet_amount = int(current_balance * 0.9)
+                                if bet_amount < 10:
+                                    self.log("Insufficient balance for minimum bet", "ERROR")
+                                    break
+                            
+                            print(f"{Fore.MAGENTA}[MARKET] {question[:60]}... (ID: {m_id}){Style.RESET_ALL}")
+                            print(f"{Fore.CYAN}Strategy: {reason} | Attempt: {attempts}/{max_attempts}{Style.RESET_ALL}")
                             
                             trade_success = self.buy_prediction(pk, m_id, outcome, bet_amount)
                             
                             if not trade_success:
-                                if market_index < len(active_markets):
-                                    self.log(f"Trying next market... ({attempts}/{max_attempts_per_trade})", "INFO")
-                                time.sleep(1)
+                                if attempts < max_attempts:
+                                    self.log(f"Trying next market...", "INFO")
+                                time.sleep(2)
                         
                         if trade_success:
                             successful_trades += 1
+                            current_balance = self.check_balance(pk)
+                            self.log(f"Remaining Balance: {current_balance:.2f} USDC", "INFO")
                         else:
-                            self.log(f"Could not place trade #{trade_num}, skipping to next trade...", "WARNING")
+                            self.log(f"Could not place trade #{trade_num}. Refreshing market data...", "WARNING")
+                            markets = self.get_prediction_markets(proxy)
+                            if markets and "markets" in markets:
+                                active_markets = [m for m in markets['markets'] if m.get('status') == 0]
+                                random.shuffle(active_markets)
+                                self.log(f"Refreshed: {len(active_markets)} active markets found", "INFO")
+                            time.sleep(2)
                         
                         if trade_num < self.trade_count_per_account:
-                            time.sleep(random.randint(3, 6))
+                            time.sleep(random.randint(4, 8))
                     
-                    self.log(f"Trade Summary: {successful_trades}/{self.trade_count_per_account} successful", "INFO")
+                    final_balance = self.check_balance(pk)
+                    self.log(f"Trade Summary: {successful_trades}/{self.trade_count_per_account} successful | Final Balance: {final_balance:.2f} USDC", "INFO")
                 else:
                     self.log("Failed to fetch market data, skipping trades...", "WARNING")
 

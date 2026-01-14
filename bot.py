@@ -130,21 +130,22 @@ class ZetariumBot:
         print(f"{Fore.CYAN}============================================================{Style.RESET_ALL}")
         print(f"{Fore.CYAN}Select Mode:{Style.RESET_ALL}")
         print(f"{Fore.GREEN}1. Run Daily Checkin")
-        print(f"2. Run All{Style.RESET_ALL}")
+        print(f"2. Run Faucet + Trades")
+        print(f"3. Run All{Style.RESET_ALL}")
         print(f"{Fore.CYAN}============================================================{Style.RESET_ALL}")
         while True:
             try:
-                choice = input(f"{Fore.GREEN}Enter your choice (1/2): {Style.RESET_ALL}").strip()
-                if choice in ['1', '2']:
-                    if choice == '2':
+                choice = input(f"{Fore.GREEN}Enter your choice (1/2/3): {Style.RESET_ALL}").strip()
+                if choice in ['1', '2', '3']:
+                    if choice in ['2', '3']:
                         try:
-                            count = int(input(f"{Fore.GREEN}How much trade : {Style.RESET_ALL}"))
+                            count = int(input(f"{Fore.GREEN}How many times do you want to trade : {Style.RESET_ALL}"))
                             self.trade_count_per_account = count
                         except ValueError:
                             self.trade_count_per_account = 1
                     return choice
                 else:
-                    print(f"{Fore.RED}Invalid choice! Please enter 1 or 2.{Style.RESET_ALL}")
+                    print(f"{Fore.RED}Invalid choice! Please enter 1, 2 or 3.{Style.RESET_ALL}")
             except KeyboardInterrupt:
                 exit(0)
     
@@ -427,7 +428,7 @@ class ZetariumBot:
             elif res.get('already_claimed'): 
                 print(f"[{time_str}] {Fore.GREEN}[SUCCESS] GM Already Claimed Today{Style.RESET_ALL}")
             
-            if mode == '2':
+            if mode in ['2', '3']:
                 self.random_delay(1, 2)
                 self.log("Processing Faucet Claim...", "INFO")
                 faucet_result = self.claim_faucet(pk)
